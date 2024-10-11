@@ -1,0 +1,19 @@
+{
+  "name": "stalkchain_db_backup",
+  "version": "1.0.0",
+  "description": "",
+  "main": "db_backup.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "config": "^3.3.12",
+    "dotenv": "^16.4.5",
+    "EventEmitter": "^1.0.0",
+    "express": "^4.21.1",
+    "mongodb": "^6.9.0",
+    "winston": "^3.15.0"
+  }
+}
