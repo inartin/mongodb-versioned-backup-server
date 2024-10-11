@@ -3,10 +3,11 @@
 The backup app listens for all MongoDB changes and manages backups with a delay.
 
 ### Key Features:
+- **Data Encryption**
+
 - **Data Queuing**: 
     - All data changes are added to a queue for 1 hour before being saved to `collectionName_versions.json` file.
-    - *TO DO*: Encrypt all data.
-  
+
 - **Queue Persistence**:
     - The queued data is saved to `change_queue.json` every 5 minutes. In case of a graceful shutdown, all queued changes are saved.
 
