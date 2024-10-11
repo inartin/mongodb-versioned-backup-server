@@ -4,13 +4,13 @@ const logger = require('./logger');
 const EventEmitter = require('events');
 const fs = require('fs').promises;
 const path = require('path');
-
+const EncryptedBackupSystem = require('./EncryptedBackupSystem');
 class BackupEventEmitter extends EventEmitter { }
 
 const backupEvents = new BackupEventEmitter();
 
 class DelayedVersionedBackup {
-    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3000,) {
+    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3001,) {
         this.primaryUri = primaryUri;
         this.backupDir = backupDir;
         this.port = port;
@@ -81,34 +81,47 @@ class DelayedVersionedBackup {
         logger.info(`Ensured backup directory exists: ${this.backupDir}`);
     }
 
+    matchQuery(document, query) {
+        return Object.entries(query).every(([key, value]) =>
+            document[key] === value
+        );
+    }
+
     setupRoutes() {
         this.app.get('/backup-data', async (req, res) => {
             try {
-                const { collection, query, timestamp } = req.query;
+                const { collection, query, timestamp, allVersions } = req.query;
                 const backupFile = path.join(this.backupDir, `${collection}_versions.json`);
 
                 const data = await fs.readFile(backupFile, 'utf8');
                 let backups = JSON.parse(data);
 
-                // Filter by timestamp if provided
-                if (timestamp) {
-                    const filterTime = new Date(timestamp).getTime() / 1000; // Convert to seconds
-                    backups = backups.filter(b => b.metadata.clusterTime.$timestamp.t <= filterTime);
+                let result = [];
+                for (const [docId, versions] of Object.entries(backups)) {
+                    let filteredVersions = versions;
+
+                    // Filter by timestamp if provided
+                    if (timestamp) {
+                        const filterTime = new Date(timestamp).getTime() / 1000;
+                        filteredVersions = versions.filter(v => v.metadata.clusterTime.$timestamp.t <= filterTime);
+                    }
+
+                    // Apply query filter if provided
+                    if (query) {
+                        const queryObj = JSON.parse(query);
+                        filteredVersions = filteredVersions.filter(v => this.matchQuery(v.data, queryObj));
+                    }
+
+                    if (filteredVersions.length > 0) {
+                        if (allVersions === 'true') {
+                            result.push(filteredVersions);
+                        } else {
+                            result.push(filteredVersions[0]); // Latest version
+                        }
+                    }
                 }
 
-                // Apply query filter if provided
-                if (query) {
-                    const queryObj = JSON.parse(query);
-                    backups = backups.filter(b => this.matchQuery(b.original.data, queryObj));
-                }
-
-                // Sort by clusterTime (most recent first) and get the first item
-                const result = backups.sort((a, b) =>
-                    b.metadata.clusterTime.$timestamp.t - a.metadata.clusterTime.$timestamp.t ||
-                    b.metadata.clusterTime.$timestamp.i - a.metadata.clusterTime.$timestamp.i
-                )[0];
-
-                res.json(result || null);
+                res.json({ result });
             } catch (error) {
                 logger.error('Error fetching data from backup:', error);
                 res.status(500).json({ error: 'Internal server error' });
@@ -169,50 +182,64 @@ class DelayedVersionedBackup {
 
     async processChange(change) {
         const backupFile = path.join(this.backupDir, `${change.ns.coll}_versions.json`);
+        let backups = {};
 
         try {
-            let backups = [];
-            try {
-                const data = await fs.readFile(backupFile, 'utf8');
+            const data = await fs.readFile(backupFile, 'utf8');
+            if (data.trim()) {  // Check if the file is not empty
                 backups = JSON.parse(data);
-            } catch (error) {
-                // File doesn't exist yet, which is fine for the first backup
             }
-
-            let documentToBackup;
-
-            switch (change.operationType) {
-                case 'insert':
-                case 'update':
-                    documentToBackup = change.fullDocument;
-                    break;
-                case 'delete':
-                    documentToBackup = {
-                        _id: change.documentKey._id,
-                        isDeleted: true
-                    };
-                    break;
-                default:
-                    logger.warn(`Unhandled operation type: ${change.operationType}`);
-                    return;
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                // File doesn't exist, we'll create it
+                logger.info(`Creating new backup file for collection: ${change.ns.coll}`);
+            } else if (error instanceof SyntaxError) {
+                // JSON parsing error
+                logger.warn(`Invalid JSON in backup file for collection: ${change.ns.coll}. Initializing empty backup.`);
+            } else {
+                // Other errors
+                logger.error(`Error reading backup file for collection: ${change.ns.coll}`, error);
+                throw error;
             }
+        }
 
-            const dataObject = {
-                original: {
-                    _id: change.documentKey._id,
-                    data: documentToBackup
-                },
-                metadata: {
-                    clusterTime: change.clusterTime,
-                    operationType: change.operationType,
-                    backupTimestamp: new Date()
-                }
+        const docId = change.documentKey._id.toString();
+        if (!backups[docId]) {
+            backups[docId] = [];
+        }
+
+        backups[docId].push({
+            original: change.fullDocument,
+            metadata: {
+                clusterTime: change.clusterTime,
+                operationType: change.operationType,
+                backupTimestamp: new Date()
             }
+        });
 
-            backups.push(dataObject);
+        // Safe comparison function
+        const safeCompare = (a, b) => {
+            const getTimestamp = (entry) => {
+                return entry?.metadata?.clusterTime?.$timestamp?.t || 0;
+            };
+            const getIncrement = (entry) => {
+                return entry?.metadata?.clusterTime?.$timestamp?.i || 0;
+            };
+
+            const timeA = getTimestamp(a);
+            const timeB = getTimestamp(b);
+            if (timeA !== timeB) {
+                return timeB - timeA; // Descending order
+            }
+            return getIncrement(b) - getIncrement(a); // Descending order
+        };
+
+        // Sort versions for this document (most recent first)
+        backups[docId].sort(safeCompare);
 
 
-            await fs.writeFile(backupFile, JSON.stringify(backups, null, 2));
+        try {
+            await fs.writeFile(backupFile, JSON.stringify(backups), 'utf8');
             logger.info(`Processed ${change.operationType} for ${change.ns.coll} in backup`);
         } catch (error) {
             const errorDetails = {
