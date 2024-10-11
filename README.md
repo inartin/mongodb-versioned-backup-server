@@ -10,6 +10,11 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 - **Queue Persistence**:
     - The queued data is saved to `change_queue.json` every 5 minutes. In case of a graceful shutdown, all queued changes are saved.
 
+- **Versioned Backup**:
+    - Each time a document changes (insert, update, or delete), a new "version" of that document is added to the backup. These versions are stored in an array, with the history of changes for each document.
+    - Backups are stored as an object where each key is a document ID, and the value is an array of versions for that document.
+    - When retreiving data, by default latest modified/created version will return. Optionally you add allVersions=true parameter and you will get the history of all changes
+
 - **Deleted Data Handling**:
     - Deleted data from the database is marked with `isDeleted: true` but is never removed from the backup file.
 
