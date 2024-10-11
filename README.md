@@ -6,24 +6,24 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 - **Data Encryption**
 
 - **Data Queuing**: 
-    - All data changes are added to a queue for 1 hour before being saved to `collectionName_versions.json` file.
+    - Changes are queued for 1 hour before being saved.
 
 - **Queue Persistence**:
-    - The queued data is saved to `change_queue.json` every 5 minutes. In case of a graceful shutdown, all queued changes are saved.
+    - Queued changes are saved every 5 minutes in a separate file to ensure nothing is lost.
 
 - **Versioned Backup**:
-    - Each time a document changes (insert, update, or delete), a new "version" of that document is added to the backup. These versions are stored in an array, with the history of changes for each document.
+    - Each document change creates a new version, storing the entire change history.
     - Backups are stored as an object where each key is a document ID, and the value is an array of versions for that document.
     - When retreiving data, by default latest modified/created version will return. Optionally you can add allVersions=true parameter and you will get the history of all changes
 
 - **Deleted Data Handling**:
-    - Deleted data from the database is marked with `isDeleted: true` but is never removed from the backup file.
+    - Deleted entries are marked `isDeleted: true` but never removed from backups.
 
 - **Logs**:
     - All logs can be found in the `backup-server.log` file.
 
 ### Starting the Server:
-1. The entry point for the server is located at `./src/index.js`.
+1. The entry point is at `./src/index.js`.
 2. The `DelayedVersionedBackup` class manages the server setup and accepts 4 parameters:
     - `MongodbUri` (string): The MongoDB connection URI.
     - `Path` (string): Path for storing backup files.
@@ -35,13 +35,7 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 *TO DO*: Implement access control, e.g., with a secret key.
 
 - **Get Data from Backup**:
-    ```js
-    axios.get(`${backupServerUrl}/backup-data?collection=${collectionName}&timestamp=${timestamp}`)
-    ```
-    - Optional: Add query parameters. Example:
-    ```js
-    &query=${encodeURIComponent(JSON.stringify({ query: { username: 'john_doe' } }))}
-    ```
+   - Retrieve data with GET requests, and cancel queued backups with POST requests.
 
 - **Cancel Saving Backup from Queue**:
     ```js
