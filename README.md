@@ -1,5 +1,5 @@
 # MongoDB Versioned Backup Server
-## Backup App Overview
+## App Overview
 
 The backup app listens for all MongoDB changes and manages backups with a delay.
 
