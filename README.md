@@ -1,7 +1,7 @@
 # MongoDB Versioned Backup Server
 ## App Overview
 
-The backup app listens for all MongoDB changes and manages backups with a delay.
+The App monitors MongoDB changes and manages backups with a delay.
 
 ### Key Features:
 - **Data Encryption**
@@ -19,6 +19,9 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 
 - **Deleted Data Handling**:
     - Deleted entries are marked `isDeleted: true` but never removed from backups.
+
+- **Deleted Data Handling**:
+   - If a mistake occurs in the main database, you have 1 hour (configurable) to fix it and cancel the queued backup using the /cancel-changes API.
 
 - **Logs**:
     - All logs can be found in the `backup-server.log` file.
