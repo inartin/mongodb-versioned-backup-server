@@ -20,6 +20,7 @@ class DelayedVersionedBackup {
         this.changeQueue = [];
         this.eventEmitter = backupEvents;
         this.queueFile = path.join(backupDir, 'change_queue.json');
+        this.encryptedBackup = new EncryptedBackupSystem(backupDir, encryptionKey);
     }
 
     async start() {
@@ -93,8 +94,14 @@ class DelayedVersionedBackup {
                 const { collection, query, timestamp, allVersions } = req.query;
                 const backupFile = path.join(this.backupDir, `${collection}_versions.json`);
 
-                const data = await fs.readFile(backupFile, 'utf8');
-                let backups = JSON.parse(data);
+                let backups = {};
+                try {
+                    const data = await this.encryptedBackup.readAndDecrypt(backupFile);
+                    backups = JSON.parse(data);
+                } catch (error) {
+                    logger.error(`Error reading encrypted backup for collection: ${collection}`, error);
+                    return res.status(500).json({ error: 'Error reading backup data' });
+                }
 
                 let result = [];
                 for (const [docId, versions] of Object.entries(backups)) {
@@ -123,7 +130,7 @@ class DelayedVersionedBackup {
 
                 res.json({ result });
             } catch (error) {
-                logger.error('Error fetching data from backup:', error);
+                logger.error('Error fetching data from encrypted backup:', error);
                 res.status(500).json({ error: 'Internal server error' });
             }
         });
@@ -185,21 +192,15 @@ class DelayedVersionedBackup {
         let backups = {};
 
         try {
-            const data = await fs.readFile(backupFile, 'utf8');
+            const data = await this.encryptedBackup.readAndDecrypt(backupFile);
             if (data.trim()) {  // Check if the file is not empty
                 backups = JSON.parse(data);
             }
         } catch (error) {
             if (error.code === 'ENOENT') {
-                // File doesn't exist, we'll create it
-                logger.info(`Creating new backup file for collection: ${change.ns.coll}`);
-            } else if (error instanceof SyntaxError) {
-                // JSON parsing error
-                logger.warn(`Invalid JSON in backup file for collection: ${change.ns.coll}. Initializing empty backup.`);
+                logger.info(`Creating new encrypted backup file for collection: ${change.ns.coll}`);
             } else {
-                // Other errors
-                logger.error(`Error reading backup file for collection: ${change.ns.coll}`, error);
-                throw error;
+                logger.error(`Error reading encrypted backup file for collection: ${change.ns.coll}`, error);
             }
         }
 
@@ -239,18 +240,17 @@ class DelayedVersionedBackup {
 
 
         try {
-            await fs.writeFile(backupFile, JSON.stringify(backups), 'utf8');
-            logger.info(`Processed ${change.operationType} for ${change.ns.coll} in backup`);
+            await this.encryptedBackup.encryptAndSave(JSON.stringify(backups), backupFile);
+            logger.info(`Processed and encrypted ${change.operationType} for ${change.ns.coll} in backup`);
         } catch (error) {
-            const errorDetails = {
+            logger.error(`Error encrypting and saving backup for collection: ${change.ns.coll}`, error);
+            this.eventEmitter.emit('backupError', {
                 operation: change.operationType,
                 collection: change.ns.coll,
                 documentId: change.documentKey._id,
                 timestamp: new Date(),
                 error: error.message
-            };
-            logger.error('Error processing change in backup:', JSON.stringify(errorDetails, null, 2));
-            this.eventEmitter.emit('backupError', errorDetails);
+            });
         }
     }
 
@@ -260,21 +260,24 @@ class DelayedVersionedBackup {
 
         for (const file of files) {
             if (file.endsWith('_versions.json')) {
-                const filePath = path.join(this.backupDir, file);
-                const data = await fs.readFile(filePath, 'utf8');
-                let backups = JSON.parse(data);
+                try {
+                    const data = await this.encryptedBackup.readAndDecrypt(file);
+                    let backups = JSON.parse(data);
 
-                backups = backups.filter(backup => {
-                    // Use clusterTime for more precise filtering
-                    const backupTime = new Date(backup.metadata.clusterTime.$timestamp.t * 1000);
-                    return backupTime < cutoffTime;
-                });
+                    backups = backups.filter(backup => {
+                        // Use clusterTime for more precise filtering
+                        const backupTime = new Date(backup.metadata.clusterTime.$timestamp.t * 1000);
+                        return backupTime < cutoffTime;
+                    });
 
-                await fs.writeFile(filePath, JSON.stringify(backups, null, 2));
-                logger.info(`Updated ${file} - removed ${backups.length} entries older than ${cutoffTime}`);
+                    await this.encryptedBackup.encryptAndSave(JSON.stringify(backups), file);
+                    logger.info(`Updated encrypted ${file} - removed entries older than ${cutoffTime}`);
+                } catch (error) {
+                    logger.error(`Error processing encrypted file: ${file}`, error);
+                }
             }
         }
-        logger.info(`Cancelled changes in the last ${minutes} minutes from backup`);
+        logger.info(`Cancelled changes in the last ${minutes} minutes from encrypted backup`);
     }
 
     startServer() {
