@@ -19,5 +19,6 @@ ecosystem.config.js
 
 # DB
 backup/
+db/
 
 example_use.js

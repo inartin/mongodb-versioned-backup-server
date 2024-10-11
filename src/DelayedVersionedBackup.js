@@ -10,7 +10,7 @@ class BackupEventEmitter extends EventEmitter { }
 const backupEvents = new BackupEventEmitter();
 
 class DelayedVersionedBackup {
-    constructor(primaryUri, backupDir, port = 3000, delayMinutes = 60) {
+    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3000,) {
         this.primaryUri = primaryUri;
         this.backupDir = backupDir;
         this.port = port;
@@ -60,9 +60,7 @@ class DelayedVersionedBackup {
     }
 
     startPeriodicQueueSave() {
-        // setInterval(() => this.saveQueue(), 5 * 60 * 1000); // Save to file every 5 minutes
-        setInterval(() => this.saveQueue(), 5000); // Save to file every 5 minutes
-
+        setInterval(() => this.saveQueue(), 5 * 60 * 1000); // Save to file every 5 minutes
     }
 
     setupGracefulShutdown() {
@@ -88,12 +86,38 @@ class DelayedVersionedBackup {
             try {
                 const { collection, query, timestamp } = req.query;
                 const backupFile = path.join(this.backupDir, `${collection}_versions.json`);
+
                 const data = await fs.readFile(backupFile, 'utf8');
-                const backups = JSON.parse(data);
-                const result = backups
-                    .filter(b => new Date(b.timestamp) <= new Date(timestamp || Date.now()))
-                    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+                let backups = JSON.parse(data);
+
+                // Filter by timestamp if provided
+                if (timestamp) {
+                    const filterTime = new Date(timestamp).getTime() / 1000; // Convert to seconds
+                    backups = backups.filter(b => b.metadata.clusterTime.$timestamp.t <= filterTime);
+                }
+
+                // Apply query filter if provided
+                if (query) {
+                    const queryObj = JSON.parse(query);
+                    backups = backups.filter(b => this.matchQuery(b.original.data, queryObj));
+                }
+
+                // Sort by clusterTime (most recent first) and get the first item
+                const result = backups.sort((a, b) =>
+                    b.metadata.clusterTime.$timestamp.t - a.metadata.clusterTime.$timestamp.t ||
+                    b.metadata.clusterTime.$timestamp.i - a.metadata.clusterTime.$timestamp.i
+                )[0];
+
                 res.json(result || null);
+            } catch (error) {
+                logger.error('Error fetching data from backup:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        this.app.get('/ping', async (req, res) => {
+            try {
+                res.status(200).json({ result: 'Pong' });
             } catch (error) {
                 logger.error('Error fetching data from backup:', error);
                 res.status(500).json({ error: 'Internal server error' });
@@ -125,7 +149,7 @@ class DelayedVersionedBackup {
     startDelayedProcessing() {
         setInterval(async () => {
             const now = new Date();
-            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 60);
+            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 60000);
 
             let processedCount = 0;
             while (this.changeQueue.length > 0 && new Date(this.changeQueue[0].queuedAt) <= cutoffTime) {
@@ -139,7 +163,7 @@ class DelayedVersionedBackup {
                 await this.saveQueue();
                 logger.info(`Processed and removed ${processedCount} changes from queue`);
             }
-        }, 600); // Check every minute
+        }, 60000); // Check every minute
         logger.info(`Started delayed processing with ${this.delayMinutes} minutes delay`);
     }
 
@@ -172,12 +196,20 @@ class DelayedVersionedBackup {
                     logger.warn(`Unhandled operation type: ${change.operationType}`);
                     return;
             }
-            backups.push({
-                ...documentToBackup,
-                _id: { id: change.documentKey._id, timestamp: change.clusterTime },
-                timestamp: change.clusterTime,
-                operationType: change.operationType
-            });
+
+            const dataObject = {
+                original: {
+                    _id: change.documentKey._id,
+                    data: documentToBackup
+                },
+                metadata: {
+                    clusterTime: change.clusterTime,
+                    operationType: change.operationType,
+                    backupTimestamp: new Date()
+                }
+            }
+
+            backups.push(dataObject);
 
 
             await fs.writeFile(backupFile, JSON.stringify(backups, null, 2));
@@ -204,8 +236,15 @@ class DelayedVersionedBackup {
                 const filePath = path.join(this.backupDir, file);
                 const data = await fs.readFile(filePath, 'utf8');
                 let backups = JSON.parse(data);
-                backups = backups.filter(b => new Date(b.timestamp) < cutoffTime);
+
+                backups = backups.filter(backup => {
+                    // Use clusterTime for more precise filtering
+                    const backupTime = new Date(backup.metadata.clusterTime.$timestamp.t * 1000);
+                    return backupTime < cutoffTime;
+                });
+
                 await fs.writeFile(filePath, JSON.stringify(backups, null, 2));
+                logger.info(`Updated ${file} - removed ${backups.length} entries older than ${cutoffTime}`);
             }
         }
         logger.info(`Cancelled changes in the last ${minutes} minutes from backup`);

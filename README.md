@@ -18,10 +18,11 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 
 ### Starting the Server:
 1. The entry point for the server is located at `./src/index.js`.
-2. The `DelayedVersionedBackup` class manages the server setup and accepts three parameters:
+2. The `DelayedVersionedBackup` class manages the server setup and accepts 4 parameters:
     - `MongodbUri` (string): The MongoDB connection URI.
     - `Path` (string): Path for storing backup files.
     - `Delay` (integer): The delay in minutes for saving queued data.
+    - `Port` (integer): Port for server to use
 
 ### Remote Server Usage:
 
@@ -29,11 +30,11 @@ The backup app listens for all MongoDB changes and manages backups with a delay.
 
 - **Get Data from Backup**:
     ```js
-    axios.get(`${backupServerUrl}/backup-data/${collectionName}?query=`)
+    axios.get(`${backupServerUrl}/backup-data?collection=${collectionName}&timestamp=${timestamp}`)
     ```
     - Optional: Add query parameters. Example:
     ```js
-    ?query=${encodeURIComponent(JSON.stringify({ query: { username: 'john_doe' } }))}
+    &query=${encodeURIComponent(JSON.stringify({ query: { username: 'john_doe' } }))}
     ```
 
 - **Cancel Saving Backup from Queue**:
