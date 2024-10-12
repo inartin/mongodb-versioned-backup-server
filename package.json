@@ -4,7 +4,8 @@
   "description": "",
   "main": "db_backup.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node ./src/index.js",
+    "pm-startgit": "pm2 start ./src/index.js --name BackupDB"
   },
   "author": "",
   "license": "ISC",
