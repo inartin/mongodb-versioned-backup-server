@@ -5,7 +5,7 @@
   "main": "db_backup.js",
   "scripts": {
     "start": "node ./src/index.js",
-    "pm-startgit": "pm2 start ./src/index.js --name BackupDB"
+    "pm-start": "pm2 start ./src/index.js --name BackupDB"
   },
   "author": "",
   "license": "ISC",
