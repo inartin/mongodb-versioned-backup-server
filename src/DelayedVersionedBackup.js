@@ -203,7 +203,7 @@ class DelayedVersionedBackup {
     startDelayedProcessing() {
         setInterval(async () => {
             const now = new Date();
-            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 600);
+            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 60000);
 
             let processedCount = 0;
             while (this.changeQueue.length > 0 && new Date(this.changeQueue[0].queuedAt) <= cutoffTime) {
@@ -217,7 +217,7 @@ class DelayedVersionedBackup {
                 await this.saveQueue();
                 logger.info(`Processed and removed ${processedCount} changes from queue`);
             }
-        }, 600); // Check every minute
+        }, 60000); // Check every minute
         logger.info(`Started delayed processing with ${this.delayMinutes} minutes delay`);
     }
 
