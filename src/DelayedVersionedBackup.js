@@ -10,7 +10,7 @@ class BackupEventEmitter extends EventEmitter { }
 const backupEvents = new BackupEventEmitter();
 
 class DelayedVersionedBackup {
-    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3001,) {
+    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3001,encryptionKey) {
         this.primaryUri = primaryUri;
         this.backupDir = backupDir;
         this.port = port;
@@ -188,7 +188,7 @@ class DelayedVersionedBackup {
     }
 
     async processChange(change) {
-        const backupFile = path.join(this.backupDir, `${change.ns.coll}_versions.json`);
+        const backupFile = `${change.ns.coll}_versions`;
         let backups = {};
 
         try {

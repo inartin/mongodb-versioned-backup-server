@@ -4,7 +4,8 @@ const backupServer = new DelayedVersionedBackup(
   config.get('primaryMongodbUri'),
   config.get('backupDir'),
   config.get('delayMinutes'),
-  config.get('port')
+  config.get('port'),
+  config.get('encryptionKey')
 );
 
 backupServer.start();
