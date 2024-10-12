@@ -5,5 +5,6 @@ module.exports = {
     port: process.env.PORT || 3001,
     delayMinutes: process.env.DELAY_MINUTES || 60,
     encryptionKey: process.env.ENCRYPTION_KEY,
-    backupDir: process.env.BACKUP_DIR
+    backupDir: process.env.BACKUP_DIR,
+    dbName: process.env.DB_NAME
 };

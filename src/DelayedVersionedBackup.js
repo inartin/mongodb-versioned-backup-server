@@ -5,12 +5,12 @@ const EventEmitter = require('events');
 const fs = require('fs').promises;
 const path = require('path');
 const EncryptedBackupSystem = require('./EncryptedBackupSystem');
+const InitialBackupManager = require('./InitialBackupManager');
 class BackupEventEmitter extends EventEmitter { }
-
 const backupEvents = new BackupEventEmitter();
 
 class DelayedVersionedBackup {
-    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3001,encryptionKey) {
+    constructor(primaryUri, backupDir, delayMinutes = 60, port = 3001, encryptionKey, dbName) {
         this.primaryUri = primaryUri;
         this.backupDir = backupDir;
         this.port = port;
@@ -21,12 +21,29 @@ class DelayedVersionedBackup {
         this.eventEmitter = backupEvents;
         this.queueFile = path.join(backupDir, 'change_queue.json');
         this.encryptedBackup = new EncryptedBackupSystem(backupDir, encryptionKey);
+        this.dbName = dbName;
+        this.initialBackupManager = null;
     }
 
     async start() {
         try {
             await this.loadQueue();
             await this.connectToDatabase();
+            // Initialize InitialBackupManager after database connection is established
+            this.initialBackupManager = new InitialBackupManager(
+                this.primaryClient,
+                this.backupDir,
+                this.encryptedBackup,
+                this.dbName
+            );
+            // Forward events from InitialBackupManager
+            this.initialBackupManager.on('backupProgress', (progress) => {
+                this.eventEmitter.emit('backupProgress', progress);
+            });
+            this.initialBackupManager.on('backupError', (error) => {
+                this.eventEmitter.emit('backupError', error);
+            });
+            await this.initialBackupManager.performInitialBackup();
             this.setupRoutes();
             this.startReplication();
             this.startDelayedProcessing();
@@ -92,7 +109,7 @@ class DelayedVersionedBackup {
         this.app.get('/backup-data', async (req, res) => {
             try {
                 const { collection, query, timestamp, allVersions } = req.query;
-                const backupFile = path.join(this.backupDir, `${collection}_versions.json`);
+                const backupFile = `${collection}_versions`;
 
                 let backups = {};
                 try {
@@ -118,12 +135,15 @@ class DelayedVersionedBackup {
                         const queryObj = JSON.parse(query);
                         filteredVersions = filteredVersions.filter(v => this.matchQuery(v.data, queryObj));
                     }
-
+                    // Sort the filtered versions by backupTimestamp in descending order
+                    filteredVersions = filteredVersions.sort((a, b) =>
+                        new Date(b.metadata.backupTimestamp) - new Date(a.metadata.backupTimestamp)
+                    );
                     if (filteredVersions.length > 0) {
                         if (allVersions === 'true') {
-                            result.push(filteredVersions);
+                            result.push({ _id: docId, versions: filteredVersions });
                         } else {
-                            result.push(filteredVersions[0]); // Latest version
+                            result.push({ _id: docId, latestVersion: filteredVersions[0] });
                         }
                     }
                 }
@@ -147,9 +167,19 @@ class DelayedVersionedBackup {
 
     async startReplication() {
         try {
-            const db = this.primaryClient.db();
+            const client = this.primaryClient;
             console.log('Setting up change stream...');
-            const changeStream = db.watch([], { fullDocument: 'updateLookup' });
+            const pipeline = [
+                {
+                    $match: {
+                        'ns.db': this.dbName  // Only watch the Stalkchain database
+                    }
+                }
+            ];
+            const changeStream = client.watch(pipeline, {
+                fullDocument: 'updateLookup',
+                allowDiskUse: true  // For large change streams
+            });
 
             changeStream.on('change', (change) => {
                 this.changeQueue.push({
@@ -157,6 +187,10 @@ class DelayedVersionedBackup {
                     queuedAt: new Date()
                 });
                 logger.info(`Change queued: ${change.operationType} in ${change.ns.coll}`);
+            });
+            changeStream.on('error', (error) => {
+                logger.error('Error in change stream:', error);
+                //TODO: reconnecting logic
             });
             logger.info('Started watching for changes in primary database');
 
@@ -169,7 +203,7 @@ class DelayedVersionedBackup {
     startDelayedProcessing() {
         setInterval(async () => {
             const now = new Date();
-            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 60000);
+            const cutoffTime = new Date(now.getTime() - this.delayMinutes * 600);
 
             let processedCount = 0;
             while (this.changeQueue.length > 0 && new Date(this.changeQueue[0].queuedAt) <= cutoffTime) {
@@ -183,7 +217,7 @@ class DelayedVersionedBackup {
                 await this.saveQueue();
                 logger.info(`Processed and removed ${processedCount} changes from queue`);
             }
-        }, 60000); // Check every minute
+        }, 600); // Check every minute
         logger.info(`Started delayed processing with ${this.delayMinutes} minutes delay`);
     }
 
